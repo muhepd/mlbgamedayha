@@ -1,0 +1,441 @@
+sensor:
+  - platform: rest
+    name: blue_jays_game_id
+    resource: "https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=141"
+    scan_interval: 3600
+    value_template: >
+      {% if value_json.dates is defined and value_json.dates[0] is defined %}
+        {{ value_json.dates[0].games[0].gamePk }}
+      {% else %}
+        None
+      {% endif %}
+
+  - platform: rest
+    name: bj_master_data
+    resource_template: >
+      {% set id = states('sensor.blue_jays_game_id') %}
+      {% if id != 'None' and id != 'unknown' %}
+        https://statsapi.mlb.com/api/v1.1/game/{{ id }}/feed/live?hydrate=lineups,boxscore,probablePitcher
+      {% else %}
+        https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=141&hydrate=lineups,probablePitcher
+      {% endif %}
+    scan_interval: 5
+    value_template: "{{ value_json.gameData.status.detailedState | default('No Game') }}"
+    json_attributes:
+      - liveData
+      - gameData
+
+  - platform: rest
+    name: al_east_standings
+    resource: "https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=2026&standingsTypes=springTraining,regularSeason&hydrate=team"
+    scan_interval: 1800
+    value_template: >
+      {% if value_json.records is defined and value_json.records | length > 0 %}
+        {{ value_json.records | length }} divisions
+      {% else %}
+        No data
+      {% endif %}
+    json_attributes:
+      - records
+
+  - platform: rest
+    name: bj_next_game
+    resource: "https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=141&startDate=2026-03-02&endDate=2026-11-01&hydrate=team,venue&limit=5"
+    scan_interval: 3600
+    value_template: >
+      {% if value_json.dates is defined and value_json.dates | length > 0 %}
+        {{ value_json.dates[0].games[0].gamePk }}
+      {% else %}
+        None
+      {% endif %}
+    json_attributes:
+      - dates
+	  
+template:
+  - sensor:
+      # ── GAME STATUS & SCORE ──────────────────────────────────────────────
+      - name: "bj_game_status"
+        state: >
+          {{ state_attr('sensor.bj_master_data', 'gameData').status.detailedState | default('No Game') }}
+
+      - name: "bj_game_score"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined %}
+            {% set ls = live.linescore %}
+            {{ ls.teams.away.runs | default(0) }} - {{ ls.teams.home.runs | default(0) }}
+          {% else %}
+            0 - 0
+          {% endif %}
+
+      - name: "bj_game_teams"
+        state: "ok"
+        attributes:
+          away_name: >
+            {{ state_attr('sensor.bj_master_data', 'gameData').teams.away.team.name | default('Away') }}
+          home_name: >
+            {{ state_attr('sensor.bj_master_data', 'gameData').teams.home.team.name | default('Home') }}
+          away_logo: >
+            {% set gd = state_attr('sensor.bj_master_data', 'gameData') %}
+            {% if gd is not none %}
+              https://www.mlbstatic.com/team-logos/{{ gd.teams.away.team.id }}.svg
+            {% else %}
+              ''
+            {% endif %}
+          home_logo: >
+            {% set gd = state_attr('sensor.bj_master_data', 'gameData') %}
+            {% if gd is not none %}
+              https://www.mlbstatic.com/team-logos/{{ gd.teams.home.team.id }}.svg
+            {% else %}
+              ''
+            {% endif %}
+          away_runs: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.teams.away.runs | default(0) if live is not none else 0 }}
+          home_runs: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.teams.home.runs | default(0) if live is not none else 0 }}
+          away_hits: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.teams.away.hits | default(0) if live is not none else 0 }}
+          home_hits: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.teams.home.hits | default(0) if live is not none else 0 }}
+          game_date: >
+            {{ state_attr('sensor.bj_master_data', 'gameData').datetime.officialDate | default('') }}
+          game_time: >
+            {{ state_attr('sensor.bj_master_data', 'gameData').datetime.time | default('') }} {{ state_attr('sensor.bj_master_data', 'gameData').datetime.ampm | default('') }}
+			
+      # ── INNING ──────────────────────────────────────────────────────────
+      - name: "bj_inning"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined %}
+            {% set ls = live.linescore %}
+            {% set half = ls.inningHalf | default('Top') %}
+            {% set inn = ls.currentInning | default(1) %}
+            {{ half }} of the {{ inn }}
+          {% else %}
+            —
+          {% endif %}
+        attributes:
+          inning_number: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.currentInning | default(0) if live is not none else 0 }}
+          inning_half: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.inningHalf | default('') if live is not none else '' }}
+
+      # ── COUNT & OUTS ─────────────────────────────────────────────────────
+      - name: "bj_count"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined %}
+            {% set ls = live.linescore %}
+            B:{{ ls.balls | default(0) }} S:{{ ls.strikes | default(0) }} O:{{ ls.outs | default(0) }}
+          {% else %}
+            B:0 S:0 O:0
+          {% endif %}
+        attributes:
+          balls: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.balls | default(0) if live is not none else 0 }}
+          strikes: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.strikes | default(0) if live is not none else 0 }}
+          outs: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.outs | default(0) if live is not none else 0 }}
+			
+      # ── BASE RUNNERS ─────────────────────────────────────────────────────
+      - name: "bj_bases"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined %}
+            {% set off = live.linescore.offense %}
+            {% set runners = [] %}
+            {% if off.first is defined %} {% set runners = runners + ['1B'] %} {% endif %}
+            {% if off.second is defined %} {% set runners = runners + ['2B'] %} {% endif %}
+            {% if off.third is defined %} {% set runners = runners + ['3B'] %} {% endif %}
+            {{ runners | join(', ') if runners | length > 0 else 'Bases Empty' }}
+          {% else %}
+            Bases Empty
+          {% endif %}
+        attributes:
+          first: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.offense.first is defined if live is not none else false }}
+          second: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.offense.second is defined if live is not none else false }}
+          third: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.offense.third is defined if live is not none else false }}
+
+      # ── PITCHER ──────────────────────────────────────────────────────────
+      - name: "bj_pitcher"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined and live.linescore.defense is defined %}
+            {% set pid = live.linescore.defense.pitcher.id | default(0) %}
+            {% if live.boxscore is defined and live.boxscore.teams is defined %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == pid %}
+                      {{ player.person.fullName }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              Unknown Pitcher
+            {% endif %}
+          {% else %}
+            Unknown Pitcher
+          {% endif %}
+        attributes:
+          pitcher_id: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {{ live.linescore.defense.pitcher.id | default(0) if live is not none and live.linescore is defined else 0 }}
+          pitch_count: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.plays is defined and live.plays.currentPlay is defined %}
+              {% set pid = live.linescore.defense.pitcher.id | default(0) %}
+              {% set ns = namespace(count=0) %}
+              {% for play in live.plays.allPlays | default([]) %}
+                {% for event in play.playEvents | default([]) %}
+                  {% if event.isPitch | default(false) and event.pitcher.id | default(0) == pid %}
+                    {% set ns.count = ns.count + 1 %}
+                  {% endif %}
+                {% endfor %}
+              {% endfor %}
+              {{ ns.count }}
+            {% else %}
+              0
+            {% endif %}
+          total_balls: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.plays is defined %}
+              {% set pid = live.linescore.defense.pitcher.id | default(0) %}
+              {% set ns = namespace(count=0) %}
+              {% for play in live.plays.allPlays | default([]) %}
+                {% for event in play.playEvents | default([]) %}
+                  {% if event.isPitch | default(false) and event.pitcher.id | default(0) == pid and not event.details.isStrike | default(false) and not event.details.isInPlay | default(false) %}
+                    {% set ns.count = ns.count + 1 %}
+                  {% endif %}
+                {% endfor %}
+              {% endfor %}
+              {{ ns.count }}
+            {% else %}
+              0
+            {% endif %}
+          total_strikes: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.plays is defined %}
+              {% set pid = live.linescore.defense.pitcher.id | default(0) %}
+              {% set ns = namespace(count=0) %}
+              {% for play in live.plays.allPlays | default([]) %}
+                {% for event in play.playEvents | default([]) %}
+                  {% if event.isPitch | default(false) and event.pitcher.id | default(0) == pid and (event.details.isStrike | default(false) or event.details.isInPlay | default(false)) %}
+                    {% set ns.count = ns.count + 1 %}
+                  {% endif %}
+                {% endfor %}
+              {% endfor %}
+              {{ ns.count }}
+            {% else %}
+              0
+            {% endif %}
+
+      # ── BATTER ───────────────────────────────────────────────────────────
+      - name: "bj_batter"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.linescore is defined and live.linescore.offense is defined %}
+            {% set bid = live.linescore.offense.batter.id | default(0) %}
+            {% if live.boxscore is defined %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.person.fullName }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              Unknown Batter
+            {% endif %}
+          {% else %}
+            Unknown Batter
+          {% endif %}
+        attributes:
+          batter_avg: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.linescore.offense is defined %}
+              {% set bid = live.linescore.offense.batter.id | default(0) %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.seasonStats.batting.avg | default('.000') }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              .000
+            {% endif %}
+          batter_obp: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.linescore.offense is defined %}
+              {% set bid = live.linescore.offense.batter.id | default(0) %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.seasonStats.batting.obp | default('.000') }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              .000
+            {% endif %}
+          batter_hr: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.linescore.offense is defined %}
+              {% set bid = live.linescore.offense.batter.id | default(0) %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.seasonStats.batting.homeRuns | default(0) }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              0
+            {% endif %}
+          batter_rbi: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.linescore.offense is defined %}
+              {% set bid = live.linescore.offense.batter.id | default(0) %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.seasonStats.batting.rbi | default(0) }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              0
+            {% endif %}
+          batter_position: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% if live is not none and live.linescore.offense is defined %}
+              {% set bid = live.linescore.offense.batter.id | default(0) %}
+              {% for side in ['home', 'away'] %}
+                {% if live.boxscore.teams[side].players is defined %}
+                  {% for key, player in live.boxscore.teams[side].players.items() %}
+                    {% if player.person.id == bid %}
+                      {{ player.position.abbreviation | default('') }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              ''
+            {% endif %}
+      # ── PITCH HISTORY (current at-bat) ───────────────────────────────────
+      - name: "bj_pitch_history"
+        state: >
+          {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+          {% if live is not none and live.plays is defined and live.plays.currentPlay is defined %}
+            {{ live.plays.currentPlay.playEvents | selectattr('isPitch') | list | length }} pitches
+          {% else %}
+            0 pitches
+          {% endif %}
+        attributes:
+          pitches: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% set ns = namespace(result=[]) %}
+            {% if live is not none and live.plays is defined and live.plays.currentPlay is defined %}
+              {% set events = live.plays.currentPlay.playEvents | default([]) %}
+              {% set pitch_num = namespace(n=0) %}
+              {% for p in events %}
+                {% if p.isPitch | default(false) %}
+                  {% set pitch_num.n = pitch_num.n + 1 %}
+                  {% set desc = p.details.description | default('Unknown') %}
+                  {% set velo = p.pitchData.startSpeed | default('') %}
+                  {% set ptype = p.details.type.description | default('Unknown') %}
+                  {% set is_strike = p.details.isStrike | default(false) %}
+                  {% set entry = {
+                    "num": pitch_num.n,
+                    "desc": desc,
+                    "type": ptype,
+                    "velo": velo,
+                    "strike": is_strike
+                  } %}
+                  {% set ns.result = ns.result + [entry] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.result }}
+
+      # ── PITCH GRID DOTS ──────────────────────────────────────────────────
+      - name: "bj_pitch_dots"
+        state: "Active"
+        attributes:
+          dots: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% set ns = namespace(data=[]) %}
+            {% if live is not none and live.plays is defined and live.plays.currentPlay is defined %}
+              {% set events = live.plays.currentPlay.playEvents | default([]) %}
+              {% set pitch_num = namespace(n=0) %}
+              {% for p in events %}
+                {% if p.isPitch | default(false) and p.pitchData is defined and p.pitchData.coordinates is defined %}
+                  {% set pitch_num.n = pitch_num.n + 1 %}
+                  {% set px = p.pitchData.coordinates.pX | float(0) %}
+                  {% set pz = p.pitchData.coordinates.pZ | float(2.5) %}
+                  {# Convert MLB coords to percentage: pX range ~-1.5 to 1.5, pZ ~1.0 to 4.0 #}
+                  {% set left_pct = ((px + 1.5) / 3.0 * 100) | round(1) %}
+                  {% set top_pct = ((4.0 - pz) / 3.0 * 100) | round(1) %}
+                  {% set color = "red" if (p.details.isStrike | default(false) or p.details.isInPlay | default(false)) else "green" %}
+                  {% set dot = {
+                    "num": pitch_num.n,
+                    "left": left_pct,
+                    "top": top_pct,
+                    "color": color,
+                    "type": p.details.type.code | default(''),
+                    "velo": p.pitchData.startSpeed | default('')
+                  } %}
+                  {% set ns.data = ns.data + [dot] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.data }}
+
+      # ── LAST 2 BATTERS ───────────────────────────────────────────────────
+      - name: "bj_last_2_batters"
+        state: "ok"
+        attributes:
+          outcomes: >
+            {% set live = state_attr('sensor.bj_master_data', 'liveData') %}
+            {% set ns = namespace(results=[]) %}
+            {% if live is not none and live.plays is defined and live.plays.allPlays is defined %}
+              {% set all_plays = live.plays.allPlays | default([]) %}
+              {% set completed = all_plays | selectattr('result.event', 'defined') | list %}
+              {% set recent = completed[-2:] if completed | length >= 2 else completed %}
+              {% for play in recent %}
+                {% set name = play.matchup.batter.fullName | default('Unknown') %}
+                {% set result = play.result.event | default('Unknown') %}
+                {% set desc = play.result.description | default('') %}
+                {% set entry = {"batter": name, "result": result, "desc": desc} %}
+                {% set ns.results = ns.results + [entry] %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.results }}
