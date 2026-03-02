@@ -14,6 +14,6 @@ Batter Card Screenshot on Mobile
 
 <img width="852" height="1600" alt="image" src="https://github.com/user-attachments/assets/fa0b6bb3-f31f-475a-8b45-f53a15ce1da8" />
 
-American League East Standings (Including Spring Training) Screenshit on Mobile
+American League East Standings (Including Spring Training) Screenshot on Mobile
 
 <img width="1080" height="950" alt="image" src="https://github.com/user-attachments/assets/e6257b53-2b63-411c-9a7f-386364a78511" />
