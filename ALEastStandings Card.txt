@@ -20,7 +20,7 @@ label: |
     let teams = [];
     let isSpringTraining = false;
     try {
-      const alEast = (records || []).find(d => d.division?.id === 201);
+      const alEast = (records || []).find(d => d.division?.id === 201 && d.standingsType === 'regularSeason');
       teams = alEast?.teamRecords || [];
       // Detect if we are in spring training by checking standingsType
       isSpringTraining = alEast?.standingsType === 'springTraining';
